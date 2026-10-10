@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room Type Predictor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+
+<main class="wrap">
+  <header class="hero">
+    <h1>What kind of room is this listing?</h1>
+    <p>Describe a New York Airbnb listing and the model tells you whether it is an entire home, a private room or a shared room.</p>
+  </header>
+
+  <div class="layout">
+    <form id="form" class="panel" novalidate>
+      <div class="panel-head">
+        <h2>Listing details</h2>
+        <button type="button" id="sample" class="ghost">Fill a sample</button>
+      </div>
+
+      <fieldset>
+        <legend>Borough</legend>
+        <div class="chips" id="boroughs"></div>
+      </fieldset>
+
+      <div class="grid">
+        <label class="field span2">Neighbourhood
+          <input id="neighbourhood" list="hoods" placeholder="Start typing, e.g. Williamsburg" autocomplete="off" required>
+          <datalist id="hoods"></datalist>
+        </label>
+        <label class="field">Latitude<input id="latitude" type="number" step="any" required></label>
+        <label class="field">Longitude<input id="longitude" type="number" step="any" required></label>
+      </div>
+
+      <div class="grid">
+        <label class="field span2">Price per night
+          <div class="with-unit"><span>$</span><input id="price" type="number" min="1" step="1" value="120" required></div>
+          <input class="range" type="range" id="priceRange" min="10" max="1000" step="5" value="120">
+        </label>
+        <label class="field">Minimum nights<input id="minimum_nights" type="number" min="1" max="365" value="2" required></label>
+        <label class="field">Host listings<input id="calculated_host_listings_count" type="number" min="0" value="1" required></label>
+        <label class="field">Total reviews<input id="number_of_reviews" type="number" min="0" value="24" required></label>
+        <label class="field">Reviews per month<input id="reviews_per_month" type="number" min="0" step="0.01" value="1.2" required></label>
+        <label class="field span2">Availability <b id="availOut">180 days a year</b>
+          <input class="range" type="range" id="availability_365" min="0" max="365" value="180">
+        </label>
+      </div>
+
+      <p id="error" class="error" role="alert" hidden></p>
+      <button type="submit" id="go" class="primary"><span class="label">Predict room type</span><span class="spinner"></span></button>
+
+      <details class="api">
+        <summary>API address</summary>
+        <input id="apiUrl" value="http://127.0.0.1:8000" aria-label="API base URL">
+      </details>
+    </form>
+
+    <section class="panel result" id="result" aria-live="polite">
+      <div class="idle" id="idle">
+        <div class="pulse"></div>
+        <h2>Your prediction shows up here</h2>
+        <p>Fill in the listing and press <em>Predict room type</em>.</p>
+      </div>
+      <div class="done" id="done" hidden>
+        <p class="small">The model thinks this is</p>
+        <h2 id="roomName"></h2>
+        <div class="ring-wrap">
+          <svg viewBox="0 0 120 120" class="ring"><circle cx="60" cy="60" r="52" class="track"/><circle cx="60" cy="60" r="52" class="bar" id="ringBar"/></svg>
+          <div class="ring-text"><b id="pct">0</b><span>% sure</span></div>
+        </div>
+        <div id="bars" class="bars"></div>
+        <button type="button" id="again" class="ghost">Try another listing</button>
+      </div>
+    </section>
+  </div>
+</main>
+<script src="script.js"></script>
+</body>
+</html>
