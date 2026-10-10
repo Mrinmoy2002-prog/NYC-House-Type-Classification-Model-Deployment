@@ -1,122 +1,302 @@
-const HOODS = {
-  "Manhattan": ["Harlem","East Harlem","Upper West Side","Upper East Side","Hell's Kitchen","Midtown","Chelsea","East Village","West Village","Greenwich Village","Lower East Side","Chinatown","SoHo","Washington Heights","Financial District","Murray Hill","Gramercy","Inwood","Tribeca","Nolita"],
-  "Brooklyn": ["Williamsburg","Bedford-Stuyvesant","Bushwick","Greenpoint","Crown Heights","Park Slope","Flatbush","Clinton Hill","Prospect-Lefferts Gardens","Fort Greene","Sunset Park","Carroll Gardens","DUMBO","Bay Ridge","Brooklyn Heights","Red Hook","Coney Island","Brighton Beach"],
-  "Queens": ["Astoria","Long Island City","Flushing","Ridgewood","Sunnyside","Jamaica","Woodside","Forest Hills","Jackson Heights","Elmhurst","Ditmars Steinway","Rockaway Beach","Corona","Rego Park"],
-  "Bronx": ["Kingsbridge","Fordham","Mott Haven","Concourse","Riverdale","Longwood","Morrisania","Port Morris","Woodlawn","Pelham Bay"],
-  "Staten Island": ["St. George","Tompkinsville","Stapleton","Port Richmond","Great Kills","New Springville","Tottenville","Concord"]
-};
-const CENTER = {"Manhattan":[40.7831,-73.9712],"Brooklyn":[40.6782,-73.9442],"Queens":[40.7282,-73.7949],"Bronx":[40.8448,-73.8648],"Staten Island":[40.5795,-74.1502]};
-const SAMPLES = [
-  {g:"Manhattan",n:"Harlem",lat:40.8116,lng:-73.9465,price:149,min:3,rev:9,rpm:.45,host:1,av:340},
-  {g:"Brooklyn",n:"Williamsburg",lat:40.7081,lng:-73.9571,price:85,min:2,rev:56,rpm:2.1,host:2,av:120},
-  {g:"Queens",n:"Astoria",lat:40.7644,lng:-73.9235,price:45,min:1,rev:130,rpm:3.4,host:6,av:300}
+// ============================================================
+// CONFIG
+// ============================================================
+// Point this at wherever your FastAPI app is running.
+const API_BASE_URL = "https://nyc-airbnb-room-type-predictor.onrender.com";
+const PREDICT_ENDPOINT = `${API_BASE_URL}/predict`;
+const HEALTH_ENDPOINT = `${API_BASE_URL}/`;
+
+const REDUCE_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Room type classes the model returns, and the visual weight of the
+// building we draw for each one (window grid + max height).
+const ROOM_CLASSES = [
+  { key: "Entire home/apt", label: "Entire home/apt", rows: 6, cols: 2, height: "100%" },
+  { key: "Private room", label: "Private room", rows: 4, cols: 2, height: "68%" },
+  { key: "Shared room", label: "Shared room", rows: 2, cols: 2, height: "42%" },
 ];
-const CLASSES = ["Entire home/apt","Private room","Shared room"]; // alphabetical, same order as model.classes_
-const $ = id => document.getElementById(id);
-let borough = "Manhattan", sampleIdx = 0;
 
-// ---------- borough chips + neighbourhood list ----------
-Object.keys(HOODS).forEach(b => {
-  const c = document.createElement("button");
-  c.type = "button"; c.className = "chip"; c.textContent = b;
-  c.onclick = () => setBorough(b, true);
-  $("boroughs").appendChild(c);
-});
-function setBorough(b, recentre) {
-  borough = b;
-  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.textContent === b));
-  $("hoods").innerHTML = HOODS[b].map(h => `<option value="${h}">`).join("");
-  if (recentre) { $("latitude").value = CENTER[b][0]; $("longitude").value = CENTER[b][1]; $("neighbourhood").value = ""; }
-}
+// A few realistic example listings so people can explore without typing.
+const EXAMPLES = [
+  {
+    latitude: 40.7484, longitude: -73.9857, price: 120, minimum_nights: 2,
+    number_of_reviews: 84, reviews_per_month: 2.3, calculated_host_listings_count: 1,
+    availability_365: 210, neighbourhood_group: "Manhattan", neighbourhood: "Midtown",
+  },
+  {
+    latitude: 40.6782, longitude: -73.9442, price: 55, minimum_nights: 1,
+    number_of_reviews: 210, reviews_per_month: 4.1, calculated_host_listings_count: 3,
+    availability_365: 300, neighbourhood_group: "Brooklyn", neighbourhood: "Bedford-Stuyvesant",
+  },
+  {
+    latitude: 40.7282, longitude: -73.7949, price: 38, minimum_nights: 3,
+    number_of_reviews: 12, reviews_per_month: 0.6, calculated_host_listings_count: 1,
+    availability_365: 90, neighbourhood_group: "Queens", neighbourhood: "Flushing",
+  },
+];
+let exampleIndex = 0;
 
-// ---------- sliders ----------
-function paint(r) { r.style.setProperty("--p", ((r.value - r.min) / (r.max - r.min) * 100) + "%"); }
-function syncPrice(from) {
-  if (from === "range") $("price").value = $("priceRange").value;
-  else $("priceRange").value = Math.min($("price").value || 0, 1000);
-  paint($("priceRange"));
-}
-$("priceRange").oninput = () => syncPrice("range");
-$("price").oninput = () => syncPrice("num");
-$("availability_365").oninput = e => { $("availOut").textContent = e.target.value + " days a year"; paint(e.target); };
+// ============================================================
+// AMBIENT SKYLINE WINDOW TWINKLE
+// ============================================================
+function buildSkylineLights() {
+  const container = document.getElementById("skylineBg");
+  if (!container || REDUCE_MOTION) return;
 
-// ---------- sample ----------
-$("sample").onclick = () => {
-  const s = SAMPLES[sampleIdx++ % SAMPLES.length];
-  setBorough(s.g, false);
-  Object.entries({neighbourhood:s.n,latitude:s.lat,longitude:s.lng,price:s.price,minimum_nights:s.min,number_of_reviews:s.rev,reviews_per_month:s.rpm,calculated_host_listings_count:s.host,availability_365:s.av})
-    .forEach(([k,v]) => $(k).value = v);
-  syncPrice("num"); $("availability_365").dispatchEvent(new Event("input"));
-};
-
-// ---------- submit ----------
-const INTS = ["minimum_nights","number_of_reviews","calculated_host_listings_count","availability_365"];
-const FLOATS = ["latitude","longitude","price","reviews_per_month"];
-$("form").onsubmit = async e => {
-  e.preventDefault();
-  const err = $("error"); err.hidden = true;
-  document.querySelectorAll("input.bad").forEach(i => i.classList.remove("bad"));
-  const body = {neighbourhood_group: borough, neighbourhood: $("neighbourhood").value.trim()};
-  FLOATS.forEach(k => body[k] = parseFloat($(k).value));
-  INTS.forEach(k => body[k] = parseInt($(k).value, 10));
-  const bad = Object.keys(body).filter(k => typeof body[k] === "number" ? Number.isNaN(body[k]) : !body[k]);
-  if (bad.length) { bad.forEach(k => $(k)?.classList.add("bad")); return showError("Fill in the highlighted fields."); }
-  if (body.price <= 0) { $("price").classList.add("bad"); return showError("Price must be above 0."); }
-
-  const btn = $("go"); btn.classList.add("loading"); btn.querySelector(".label").textContent = "Predicting";
-  try {
-    const res = await fetch($("apiUrl").value.replace(/\/$/, "") + "/predict", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      const msg = Array.isArray(d.detail) ? d.detail.map(x => `${x.loc.at(-1)}: ${x.msg}`).join(". ") : "The server returned an error (" + res.status + ").";
-      throw new Error(msg);
-    }
-    render(await res.json());
-  } catch (x) {
-    showError(x instanceof TypeError ? "Can't reach the API. Check that uvicorn is running and the API address below is correct." : x.message);
-  } finally {
-    btn.classList.remove("loading"); btn.querySelector(".label").textContent = "Predict room type";
+  const count = 42;
+  for (let i = 0; i < count; i++) {
+    const light = document.createElement("div");
+    light.className = "window-light";
+    const size = Math.random() < 0.5 ? 2 : 3;
+    light.style.width = `${size}px`;
+    light.style.height = `${size}px`;
+    light.style.left = `${Math.random() * 100}%`;
+    light.style.bottom = `${8 + Math.random() * 32}vh`;
+    light.style.animationDelay = `${Math.random() * 5}s`;
+    light.style.animationDuration = `${3.5 + Math.random() * 3}s`;
+    container.appendChild(light);
   }
-};
-function showError(m) { $("error").textContent = m; $("error").hidden = false; }
-
-// ---------- result ----------
-function render({Predicted_room_type: room, Probability: probs}) {
-  const labels = probs.map((_, i) => CLASSES.length === probs.length ? CLASSES[i] : "Class " + (i + 1));
-  const top = probs.indexOf(Math.max(...probs));
-  $("idle").hidden = true; $("done").hidden = false;
-  $("roomName").textContent = room;
-  $("bars").innerHTML = probs.map((p, i) => `<div class="row ${i === top ? "top" : ""}"><div class="meta"><span>${labels[i]}</span><span>${(p * 100).toFixed(1)}%</span></div><div class="track-b"><div class="fill" data-w="${p * 100}"></div></div></div>`).join("");
-  const pct = probs[top] * 100;
-  $("ringBar").style.strokeDashoffset = 327;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    $("ringBar").style.strokeDashoffset = 327 * (1 - probs[top]);
-    document.querySelectorAll(".fill").forEach(f => f.style.width = f.dataset.w + "%");
-  }));
-  const t0 = performance.now();
-  (function tick(t) { const k = Math.min((t - t0) / 1200, 1); $("pct").textContent = Math.round(pct * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(tick); })(t0);
-  if (window.innerWidth < 860) $("result").scrollIntoView({behavior:"smooth", block:"start"});
 }
-$("again").onclick = () => { $("done").hidden = true; $("idle").hidden = false; window.scrollTo({top:0, behavior:"smooth"}); };
 
-// ---------- drifting night-city background ----------
-(function () {
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const cv = $("bg"), ctx = cv.getContext("2d"); let W, H, pts;
-  const init = () => { W = cv.width = innerWidth; H = cv.height = innerHeight;
-    pts = Array.from({length: Math.min(70, W / 18 | 0)}, () => ({x:Math.random()*W, y:Math.random()*H, vx:(Math.random()-.5)*.25, vy:(Math.random()-.5)*.25, r:Math.random()*1.6+.4})); };
-  addEventListener("resize", init); init();
-  (function loop() {
-    ctx.clearRect(0, 0, W, H);
-    pts.forEach((p, i) => {
-      p.x = (p.x + p.vx + W) % W; p.y = (p.y + p.vy + H) % H;
-      ctx.fillStyle = i % 3 ? "#ffc46b55" : "#ff6f9166"; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.3); ctx.fill();
-      for (let j = i + 1; j < pts.length; j++) { const q = pts[j], d = Math.hypot(p.x - q.x, p.y - q.y);
-        if (d < 120) { ctx.strokeStyle = `rgba(150,160,230,${.12 * (1 - d / 120)})`; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); } }
+// ============================================================
+// FORM WIRING
+// ============================================================
+const form = document.getElementById("predictForm");
+const predictBtn = document.getElementById("predictBtn");
+const formError = document.getElementById("formError");
+const availabilityInput = document.getElementById("availability_365");
+const availabilityValue = document.getElementById("availabilityValue");
+const exampleBtn = document.getElementById("exampleBtn");
+
+availabilityInput.addEventListener("input", () => {
+  availabilityValue.textContent = availabilityInput.value;
+});
+
+exampleBtn.addEventListener("click", () => {
+  const data = EXAMPLES[exampleIndex % EXAMPLES.length];
+  exampleIndex++;
+  Object.entries(data).forEach(([key, value]) => {
+    const el = form.elements[key];
+    if (el) el.value = value;
+  });
+  availabilityValue.textContent = data.availability_365;
+  formError.textContent = "";
+});
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  formError.textContent = "";
+
+  if (!form.reportValidity()) return;
+
+  const payload = collectPayload();
+  setLoading(true);
+
+  try {
+    const res = await fetch(PREDICT_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
-    requestAnimationFrame(loop);
-  })();
-})();
 
-// init
-setBorough("Manhattan", true); syncPrice("num"); paint($("availability_365"));
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail ? formatDetail(body.detail) : `Request failed (${res.status}).`);
+    }
+
+    const result = await res.json();
+    renderResult(result);
+  } catch (err) {
+    formError.textContent = err.message?.includes("fetch")
+      ? "Can't reach the prediction API. Make sure the FastAPI server is running and reachable."
+      : err.message || "Something went wrong. Check the values and try again.";
+  } finally {
+    setLoading(false);
+  }
+});
+
+function collectPayload() {
+  const fd = new FormData(form);
+  return {
+    latitude: parseFloat(fd.get("latitude")),
+    longitude: parseFloat(fd.get("longitude")),
+    price: parseFloat(fd.get("price")),
+    minimum_nights: parseInt(fd.get("minimum_nights"), 10),
+    number_of_reviews: parseInt(fd.get("number_of_reviews"), 10),
+    reviews_per_month: parseFloat(fd.get("reviews_per_month")),
+    calculated_host_listings_count: parseInt(fd.get("calculated_host_listings_count"), 10),
+    availability_365: parseInt(fd.get("availability_365"), 10),
+    neighbourhood_group: fd.get("neighbourhood_group"),
+    neighbourhood: fd.get("neighbourhood"),
+  };
+}
+
+function formatDetail(detail) {
+  if (Array.isArray(detail)) {
+    return detail.map((d) => d.msg || JSON.stringify(d)).join(" ");
+  }
+  return String(detail);
+}
+
+function setLoading(isLoading) {
+  predictBtn.disabled = isLoading;
+  predictBtn.classList.toggle("loading", isLoading);
+}
+
+// ============================================================
+// RESULT RENDERING
+// ============================================================
+const resultEmpty = document.getElementById("resultEmpty");
+const resultContent = document.getElementById("resultContent");
+const predictedName = document.getElementById("predictedName");
+const buildingsRow = document.getElementById("buildingsRow");
+const probList = document.getElementById("probList");
+
+function renderResult(result) {
+  const predicted = result.Predicted_room_type;
+  const probs = result.Probability; // array aligned to model.classes_ order
+
+  // Pair each class with its probability. We trust ROOM_CLASSES order
+  // matches sklearn's alphabetical classes_ output; fall back gracefully
+  // if lengths mismatch.
+  const paired = ROOM_CLASSES.map((cls, i) => ({
+    ...cls,
+    prob: typeof probs?.[i] === "number" ? probs[i] : 0,
+  }));
+
+  resultEmpty.hidden = true;
+  resultContent.hidden = false;
+
+  predictedName.textContent = predicted;
+
+  buildBuildings(paired, predicted);
+  buildProbList(paired, predicted);
+}
+
+function buildBuildings(paired, predicted) {
+  buildingsRow.innerHTML = "";
+
+  paired.forEach((cls) => {
+    const col = document.createElement("div");
+    col.className = "building-col";
+
+    const b = document.createElement("div");
+    b.className = "building";
+    b.style.setProperty("--h", "18%");
+
+    const totalWindows = cls.rows * cls.cols;
+    const litCount = Math.round(totalWindows * cls.prob);
+
+    for (let i = 0; i < totalWindows; i++) {
+      const win = document.createElement("div");
+      win.className = "win";
+      b.appendChild(win);
+    }
+
+    const caption = document.createElement("div");
+    caption.className = "building-caption";
+    caption.textContent = cls.label;
+
+    col.appendChild(b);
+    col.appendChild(caption);
+    buildingsRow.appendChild(col);
+
+    // Animate height + lit windows after insertion, staggered per building.
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        b.style.setProperty("--h", cls.height);
+        const wins = b.querySelectorAll(".win");
+        wins.forEach((w, i) => {
+          if (i < litCount) {
+            setTimeout(() => w.classList.add("lit"), REDUCE_MOTION ? 0 : 60 * i + 300);
+          }
+        });
+        if (cls.key === predicted) {
+          b.style.boxShadow = "0 0 22px -4px var(--amber-glow)";
+        }
+      }, REDUCE_MOTION ? 0 : 80);
+    });
+  });
+}
+
+function buildProbList(paired, predicted) {
+  probList.innerHTML = "";
+  const sorted = [...paired].sort((a, b) => b.prob - a.prob);
+
+  sorted.forEach((cls) => {
+    const row = document.createElement("div");
+    row.className = "prob-row" + (cls.key === predicted ? " top" : "");
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = cls.label;
+
+    const value = document.createElement("span");
+    value.className = "value";
+    value.textContent = "0%";
+
+    const track = document.createElement("div");
+    track.className = "prob-track";
+    const fill = document.createElement("div");
+    fill.className = "prob-fill";
+    track.appendChild(fill);
+
+    row.appendChild(name);
+    row.appendChild(value);
+    row.appendChild(track);
+    probList.appendChild(row);
+
+    const pct = Math.round(cls.prob * 100);
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        fill.style.width = `${pct}%`;
+        animateCount(value, pct);
+      }, REDUCE_MOTION ? 0 : 150);
+    });
+  });
+}
+
+function animateCount(el, target) {
+  if (REDUCE_MOTION) {
+    el.textContent = `${target}%`;
+    return;
+  }
+  const duration = 700;
+  const start = performance.now();
+  function tick(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = `${Math.round(target * eased)}%`;
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ============================================================
+// API HEALTH CHECK
+// ============================================================
+async function checkApiStatus() {
+  const statusEl = document.getElementById("apiStatus");
+  try {
+    const res = await fetch(HEALTH_ENDPOINT, { method: "GET" });
+    if (res.ok) {
+      statusEl.classList.add("online");
+      statusEl.classList.remove("offline");
+      statusEl.lastChild.textContent = "API connected";
+    } else {
+      throw new Error("bad status");
+    }
+  } catch {
+    statusEl.classList.add("offline");
+    statusEl.classList.remove("online");
+    statusEl.lastChild.textContent = "API unreachable";
+  }
+}
+
+// ============================================================
+// INIT
+// ============================================================
+document.addEventListener("DOMContentLoaded", () => {
+  buildSkylineLights();
+  checkApiStatus();
+});
